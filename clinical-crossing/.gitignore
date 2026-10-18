@@ -24,3 +24,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# PUMS download cache (make_villagers.py)
+scripts/.cache/
