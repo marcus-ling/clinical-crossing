@@ -1,0 +1,91 @@
+# Clinical Crossing
+
+A cozy Animal Crossing-style simulation of a clinical trial, built solo for a hackathon.
+
+**Hackathon prompt:** "Build a solution that removes a major bottleneck on the path from discovery to an approved medicine."
+**Bottleneck targeted:** trial enrollment and retention. Trials often stall because of social barriers (travel, work, caregiving, language), not biology.
+**Pitch line:** "Trials don't fail in the lab, they fail on the bus ride home."
+
+## About the developer
+I am a solo beginner. Keep code simple, readable, and commented. Prefer plain JavaScript patterns over clever ones. When you finish a task, explain in plain English what you changed and why. I must be able to explain the sim logic to a judge in 20 seconds.
+
+## How it works
+- Villagers (about 100) are sampled from real US census data (ACS PUMS) for ONE region. 100 villagers means 1 villager = 1 percentage point of retention.
+- ONE real trial protocol, pre-parsed by hand into `public/data/protocol.json`, creates burdens for each villager.
+- The player flips 3 what-if toggles (weekend visits, home blood draws, no fasting).
+- Villagers visibly stay or drop out. A before/after retention number moves.
+
+## Stack and hard rules
+- React + Vite. Browser only. **No backend, no database, no auth.**
+- **Do not add new dependencies without asking me first.** The data script writes JSON (not CSV) so no CSV parser is needed. Draw the chart with plain SVG or CSS bars, no chart library.
+- Do not rewrite or reformat files I did not ask you to touch. Show me what you plan to change before large edits.
+- Work in small steps. One task per prompt. Stop and let me test after each one.
+- Data prep is a Python script in `scripts/`. Everything else is JavaScript.
+- My Census API key lives in `.env`, which is listed in `.gitignore`. Never commit it, print it, or paste it into a file.
+
+## Project structure
+```
+public/data/villagers.json     sampled villagers (output of the script)
+public/data/protocol.json      the one trial protocol, hand-checked
+scripts/make_villagers.py      ACS PUMS -> villagers.json
+src/sim/runSim.js              the sim engine (pure function, no UI code)
+src/components/                Board, Villager, Toggles, RetentionChart, AssumptionsPanel
+src/App.jsx
+```
+
+## The sim (most important part)
+`runSim(villagers, protocol, toggles)` is a **pure function** that returns retention and per-villager results. It must never import React or touch the DOM.
+
+Each villager gets a burden score from: travel time to the site for each **office** visit, time lost per visit (lost work hours), no vehicle, children at home, fasting-lab conflict with work, language barrier. Telephone visits cost time but no travel. Read the visit lists and `needs_verification` flags in `protocol.json`; do not assume values that are `null`.
+
+`dropout_probability = logistic(a + b * burden)`
+
+- Toggles only modify the burden inputs:
+  - weekend visits removes the work-conflict term for office visits (assumes office visits are weekday daytime, which is NOT confirmed in the protocol)
+  - home blood draws reduces, but does not remove, travel and time burden for lab-related visits (hypothetical, since the protocol uses a central lab)
+  - no fasting removes the fasting term (hypothetical)
+- Use a seeded random number generator so results are repeatable during the demo. Write a tiny one by hand (for example mulberry32). No dependency.
+- Put ALL coefficients in one `ASSUMPTIONS` object at the top of `runSim.js`, each with a comment saying whether it is sourced (with citation) or an assumption. The UI assumptions panel reads from this object.
+- **Calibration:** choose the intercept `a` so baseline retention lands near the published VIVID completion rate (365 of 420, about 87%, source PMC7065168; the protocol itself planned for 25% dropout). Label `a` as "calibrated to published rate". The slope `b` and the burden weights are assumptions. Expect the toggles to move retention by a few points, not tens of points, and do not tune the weights just to make the demo number bigger.
+
+## Honesty rules (never violate)
+- Villagers are sampled from real data. **Behavior rules and coefficients are illustrative assumptions** unless a published source is cited. Never invent dropout rates or statistics.
+- Never present sim output as a real-world prediction. Say "illustrative" in the UI.
+- ACS has no diabetes or insulin variable, so villagers are a general adult proxy for trial participants. Say so in the assumptions panel.
+- Do not use race or ethnicity as a biological proxy. Use structural variables only (transit, income, caregiving, language).
+- Any generated villager backstory is fiction and must be labeled illustrative.
+- Do not make claims about FDA policy or trial facts. If unsure, leave a `TODO: verify` comment.
+
+## Design (no design skills, so keep it simple)
+- CSS grid of rounded pastel squares, 12x12. One villager per house tile, the clinic is a larger tile in the center, with a few path and tree tiles.
+- Font: Nunito (Google Fonts). Rounded corners everywhere.
+- Palette: cream background, soft green, warm brown, one accent color. Define as CSS variables in one place.
+- Only two animations: villagers walk to the clinic if they stay, and fade out if they drop. No other motion.
+- Clicking a villager shows a speech bubble with their burden in plain language.
+- Mobile-friendly layout is nice to have, not required.
+
+## Scope cuts (do not build these unless I say so)
+Live protocol upload, multiple regions, user accounts, saved games, multiplayer, sound, voice, herb/remedy quests.
+Stretch goals, only after the core works and I ask: second county (urban vs rural), a "who never gets in" view based on the protocol's exclusion criteria, voice.
+
+## Trial and region
+- Trial: NCT02561078 (VIVID), Eli Lilly and Company, protocol B5K-MC-IBHD. A historical trial (about 2015 to 2016), used as a demo scenario.
+- Region: Wayne County, MI, with the site in Livonia. Choose the PUMA(s) from the Census PUMA-to-county crosswalk and tell me which; I approve before sampling. Verify, do not guess.
+- Confirmed from the protocol: 17 visits total, about 29 weeks from Visit 1 to Visit 17 (1-week screening, 2-week lead-in, 26-week treatment). Office visits 5, 6, 7, 10, 13, 15, 17. Telephone visits 8, 9, 11, 12, 14, 16. Ages 18 to 85.
+- NOT yet verified (see `needs_verification` in protocol.json): site street address, Visit 3, visit length, weekday-only, fasting instructions, which visits include blood draws.
+
+## Status (I will update this as I go)
+- [x] Setup and first commit
+- [x] protocol.json drafted
+- [ ] protocol.json open items verified against Attachments 1 and 2
+- [ ] villagers.json looks like plausible humans
+- [ ] runSim.js: changing a toggle moves retention in a sensible direction, baseline near 87%
+- [ ] Board renders villagers and clinic
+- [ ] Toggles + before/after chart
+- [ ] Assumptions panel
+- [ ] Deployed, backup demo video recorded
+
+## Commands
+- `npm run dev` start the dev server
+- `npm run build` production build (run before deploying)
+- `python scripts/make_villagers.py` regenerate villagers.json

@@ -1,0 +1,110 @@
+{
+  "project": "Clinical Crossing",
+  "nctId": "NCT02561078",
+  "studyAcronym": "VIVID",
+  "protocolCode": "B5K-MC-IBHD",
+  "title": "Safety and Efficacy of Human Regular U-500 Insulin Administered by Continuous Subcutaneous Insulin Infusion vs Multiple Daily Injections in Subjects With Type 2 Diabetes Mellitus",
+  "sponsor": "Eli Lilly and Company",
+  "trialStatus": "Historical trial (protocol estimated first visit Oct 2015, last visit Dec 2016; results published). Confirm status on the registry.",
+
+  "source": {
+    "registry": "ClinicalTrials.gov NCT02561078",
+    "protocolDocument": "Protocol B5K-MC-IBHD, approved 11-Jun-2015 (Prot_003.pdf, uploaded on the registry record)",
+    "dateChecked": "2026-10-18",
+    "checkedAgainst": "Protocol sections 2, 7, 8 and 9. Attachment 1 (Study Schedule, p.74) and Attachment 2 (Lab Tests, p.78) NOT yet read.",
+    "note": "Re-read the protocol yourself before presenting. Anything marked needs_verification is not confirmed."
+  },
+
+  "site": {
+    "name": "Adult Endocrinology Consultants",
+    "city": "Livonia",
+    "county": "Wayne County",
+    "state": "MI",
+    "streetAddress": "15144 Levan Rd, Ste 44, Livonia, MI 48154",
+    "needs_verification": false,
+    "note": "Confirm this site is in the registry Locations list and copy its street address. The real trial was multicenter, so this is ONE site used as the demo scenario."
+  },
+
+  "population": {
+    "ageMin": 18,
+    "ageMax": 85,
+    "hba1cRangePercent": "7.5 to 12.0",
+    "bmiRange": "25 to 50",
+    "dailyInsulinUnits": "more than 200, up to 600",
+    "socialLensExclusions": [
+      "Irregular sleep/wake cycle, e.g. night-shift work (exclusion 16)",
+      "Intends an extended fast during the study, including for religious reasons (exclusion 17)",
+      "Hearing or vision impairment that interferes with safe pump use (exclusion 22)",
+      "Unable or unwilling to perform procedures independently; no proxy allowed (exclusion 28)"
+    ],
+    "simAssumption": "ACS/PUMS has no diabetes or insulin-dose variable. Villagers are a general adult population proxy; real participants are a much narrower subset. Say this in the assumptions panel."
+  },
+
+  "schedule": {
+    "totalVisits": 17,
+    "screeningWeeks": 1,
+    "leadInWeeks": 2,
+    "treatmentWeeks": 26,
+    "totalWeeksFromVisit1": 29,
+    "visit1Week": -3,
+    "finalVisitWeek": 26,
+    "officeVisitsConfirmed": [5, 6, 7, 10, 13, 15, 17],
+    "telephoneVisitsConfirmed": [8, 9, 11, 12, 14, 16],
+    "officeVisitsInferred": [1, 2, 4],
+    "visitWeeks": {"1": -3, "2": -2, "4": 0, "5": 1, "6": 2, "7": 3, "8": 4, "9": 6, "10": 8, "11": 10, "12": 12, "13": 14, "15": 20, "17": 26},
+    "visitWeeksInferred": {"3": -1, "14": 17, "16": 23},
+    "visit3": "office",
+    "visitDurationHours": 3,
+    "weekdayOnly": true,
+    "assumedFields": ["visit3", "visitDurationHours", "weekdayOnly"],
+    "needs_verification": false,
+    "note": "Visits 1, 2 and 4 (screening, lead-in, randomization) are inferred to be in person. Visit 3, visit length and weekday-only are not stated in what was read; check Attachment 1. Leave null and treat as assumptions in the sim until confirmed."
+  },
+
+  "burdens": {
+    "fasting": {
+      "likely": true,
+      "basis": "Fasting plasma glucose is measured by the central lab; the fasting instruction for visits itself was not seen.",
+      "needs_verification": true
+    },
+    "onsiteLabs": {
+      "likely": true,
+      "basis": "Central lab HbA1c and FPG plus clinical labs. Which visits include blood draws is in Attachments 1 and 2.",
+      "needs_verification": true
+    },
+    "selfMonitoring": {
+      "fourPointSmbgDaily": true,
+      "sevenPointProfile": "On any 2 non-consecutive days in the 2 weeks before visits specified in the schedule",
+      "overnight0300Check": "Within 48 hours of each insulin dose increase at telephone and office visits (preferably the first night after the change); also one point in each 7-point profile. Not required every night.",
+      "diaryReturnedAtOfficeVisits": true,
+      "proxyAllowed": false
+    },
+    "armDifferences": {
+      "CSII": "OmniPod U-500 pump. Training at Visits 5 and 6. Pod changed every 2 to 3 days.",
+      "MDI": "U-500R three times daily with a U-100 syringe, with a dose conversion (divide by 5).",
+      "simAssumption": "Participants are randomized 1:1, so burden differs by arm. The sim uses one arm-agnostic 'typical participant'. State this."
+    },
+    "deviceComplexity": {
+      "value": "high",
+      "basis": "ASSUMPTION, not a protocol fact. Both arms involve a non-trivial device or dose conversion.",
+      "isAssumption": true
+    }
+  },
+
+  "publishedOutcomes": {
+    "randomized": 420,
+    "completers": 365,
+    "completionRate": 0.87,
+    "nonCompletionRate": 0.13,
+    "plannedDropoutRateInProtocol": 0.25,
+    "source": "VIVID study publication, PMC7065168",
+    "caveat": "Completion among screened, selected participants at trial sites, not a general-population dropout rate. Use only as a baseline calibration anchor."
+  },
+
+  "needs_verification": [
+    "Site street address and presence in registry Locations list",
+    "Visit 3 type and week; visit durations; weekday-only scheduling (Attachment 1)",
+    "Fasting instructions and which visits include blood draws (Attachments 1 and 2)",
+    "Registry overall status"
+  ]
+}
