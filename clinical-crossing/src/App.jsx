@@ -1,121 +1,100 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useEffect, useMemo, useState } from 'react'
+import Board from './components/Board.jsx'
+import Toggles from './components/Toggles.jsx'
+import { runSim } from './sim/runSim.js'
 import './App.css'
 
+// BASE_URL keeps the paths right if the site is deployed under a sub-folder.
+const VILLAGERS_URL = `${import.meta.env.BASE_URL}data/villagers.json`
+const PROTOCOL_URL = `${import.meta.env.BASE_URL}protocol.json`
+
+// Same seed as scripts/checkSim.js, so the faded villagers match its sampled run.
+const SEED = 42
+const ALL_OFF = { weekendVisits: false, homeBloodDraws: false, noFasting: false }
+
+async function loadJson(url) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Could not load ${url} (${res.status})`)
+  return res.json()
+}
+
+const pct = (x) => `${Math.round(x * 100)}%`
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [data, setData] = useState(null) // { villagers, protocol }
+  const [toggles, setToggles] = useState(ALL_OFF)
+  const [error, setError] = useState(null)
+
+  // Load the data once when the page opens.
+  useEffect(() => {
+    let cancelled = false // ignore a response that arrives after the page is gone
+    Promise.all([loadJson(VILLAGERS_URL), loadJson(PROTOCOL_URL)])
+      .then(([villagers, protocol]) => {
+        if (!cancelled) setData({ villagers, protocol })
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Baseline: all toggles off. Current: whatever the switches say.
+  // Both use the same seed, so each villager keeps the same random number.
+  const baseline = useMemo(() => (data ? runSim(data.villagers, data.protocol, ALL_OFF, SEED) : null), [data])
+  const current = useMemo(() => (data ? runSim(data.villagers, data.protocol, toggles, SEED) : null), [data, toggles])
+
+  let rescuedCount = 0
+  if (baseline && current) {
+    current.villagers.forEach((r, i) => {
+      if (baseline.villagers[i].dropped && !r.dropped) rescuedCount += 1
+    })
+  }
+
+  const diffPoints = current && baseline ? (current.expectedRetention - baseline.expectedRetention) * 100 : 0
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <main className="app">
+      <header className="header">
+        <h1>Clinical Crossing</h1>
+        <span className="illustrative-badge">Illustrative simulation</span>
+      </header>
 
-      <div className="ticks"></div>
+      {error && <p className="message">{error}</p>}
+      {!error && !data && <p className="message">Loading the town…</p>}
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      {data && (
+        <>
+          <section className="headline">
+            <div className="scores">
+              <div className="score">
+                <span className="score-label">Baseline</span>
+                <span className="score-number">{pct(baseline.expectedRetention)}</span>
+              </div>
+              <div className="score">
+                <span className="score-label">With changes</span>
+                <span className="score-number">{pct(current.expectedRetention)}</span>
+              </div>
+              <div className="score">
+                <span className="score-label">Difference</span>
+                <span className="score-number">
+                  {diffPoints >= 0 ? '+' : ''}
+                  {diffPoints.toFixed(1)} pts
+                </span>
+              </div>
+            </div>
+            <p className="headline-note">
+              Expected retention. Faded villagers are one random draw; the headline is the expected value.
+              {rescuedCount > 0 && ` ${rescuedCount} villager${rescuedCount === 1 ? '' : 's'} rescued in this draw (green ring).`}
+            </p>
+          </section>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <Toggles toggles={toggles} onChange={setToggles} />
+          <Board villagers={data.villagers} results={current.villagers} baselineResults={baseline.villagers} />
+        </>
+      )}
+    </main>
   )
 }
 

@@ -1,15 +1,19 @@
 // checkSim.js
 // Plain node checks for the sim. No test framework.
 //
-// Run from the project root:
-//   node scripts/checkSim.js              run the checks
+// Run with plain node, from any folder:
+//   node scripts/checkSim.js              run the checks (from clinical-crossing/)
 //   node scripts/checkSim.js --calibrate  find the intercept `a` (then paste it into runSim.js)
 
 import { readFileSync } from 'node:fs'
 import { runSim, ASSUMPTIONS } from '../src/sim/runSim.js'
 
-const villagers = JSON.parse(readFileSync('public/data/villagers.json', 'utf-8'))
-const protocol = JSON.parse(readFileSync('public/protocol.json', 'utf-8'))
+// Find the data files relative to this script, not the folder node was started in.
+const villagersUrl = new URL('../public/data/villagers.json', import.meta.url)
+const protocolUrl = new URL('../public/protocol.json', import.meta.url)
+
+const villagers = JSON.parse(readFileSync(villagersUrl, 'utf-8'))
+const protocol = JSON.parse(readFileSync(protocolUrl, 'utf-8'))
 
 const SEED = 42
 const TARGET = 0.87 // published VIVID completion, 365 of 420 (PMC7065168)
