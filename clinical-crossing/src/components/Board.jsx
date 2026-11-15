@@ -53,7 +53,8 @@ function directionToClinic(r, c) {
 // villagers:       from villagers.json
 // results:         runSim(...).villagers for the current toggles, same order as villagers
 // baselineResults: runSim(...).villagers with all toggles off (to spot "rescued" villagers)
-export default function Board({ villagers, results, baselineResults }) {
+// stories:         { "<villager id>": "story text" } from stories.json, or {} if none
+export default function Board({ villagers, results, baselineResults, stories = {} }) {
   // id of the villager whose speech bubble is open (null = none)
   const [openId, setOpenId] = useState(null)
 
@@ -108,6 +109,7 @@ export default function Board({ villagers, results, baselineResults }) {
             key={key}
             villager={villager}
             result={result}
+            story={stories[String(villager.id)]}
             rescued={baselineResult.dropped && !result.dropped}
             walking={walkedOut && !result.dropped}
             direction={directionToClinic(r, c)}

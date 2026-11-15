@@ -23,8 +23,9 @@ const WALK_DISTANCE = 0.35
 // walking:   true = standing out toward the clinic, false = at home
 // direction: { x, y } unit vector pointing at the clinic
 // rescued:   dropped in the baseline but stays with the current toggles
+// story:     AI-written fiction from stories.json, or undefined if there is none
 // row and col decide which way the bubble opens, so it stays on the board.
-export default function Villager({ villager, result, rescued, walking, direction, row, col, isOpen, onClick }) {
+export default function Villager({ villager, result, story, rescued, walking, direction, row, col, isOpen, onClick }) {
   const bubbleClasses = ['bubble']
   if (row < 2) bubbleClasses.push('bubble-below')
   if (col < 3) bubbleClasses.push('bubble-left')
@@ -53,7 +54,21 @@ export default function Villager({ villager, result, rescued, walking, direction
 
       {isOpen && (
         <div className={bubbleClasses.join(' ')}>
-          <p className="bubble-main">{result.topBurdens.map((name) => BURDEN_PHRASES[name]).join(', ')}</p>
+          {story ? (
+            // Story first (fiction, clearly labeled), then the real model burdens.
+            <>
+              <p className="bubble-story">“{story}”</p>
+              <p className="bubble-story-label">AI-written fiction, illustrative</p>
+              <ul className="bubble-burdens">
+                {result.topBurdens.map((name) => (
+                  <li key={name}>{BURDEN_PHRASES[name]}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            // No story for this villager: the plain-language burdens, as before.
+            <p className="bubble-main">{result.topBurdens.map((name) => BURDEN_PHRASES[name]).join(', ')}</p>
+          )}
           <p className="bubble-detail">
             Age {villager.AGEP}. Chance of dropping out: {Math.round(result.dropProbability * 100)}%.
             {result.dropped ? ' Dropped out in this draw.' : ' Stayed in this draw.'}

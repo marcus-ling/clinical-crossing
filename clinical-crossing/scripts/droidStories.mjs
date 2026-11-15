@@ -11,6 +11,14 @@
 //
 // Stories are ILLUSTRATIVE FICTION built only from census-derived fields.
 // The browser app never imports the SDK; it only reads the JSON this writes.
+//
+// How we avoid repetitive stories WITHOUT inventing facts:
+//   - Code (not the model) gives each villager a voice, a focus burden and a
+//     target length, using a seeded random generator so runs are repeatable.
+//   - Villagers are shuffled into small batches of 10, one fresh Droid session each.
+//   - A ban list of overused phrases goes into the prompt AND the validator.
+//   - The validator rejects overused openings, overused 4-word phrases and
+//     near-duplicates, then retries only the failing ids (at most 2 times).
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
@@ -18,9 +26,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { run, AutonomyLevel } from '@factory/droid-sdk/node'
 import { runSim, BURDEN_LABELS } from '../src/sim/runSim.js'
+import { toWords, openingOf, phrasesOf, measure, printMetrics } from './storyMetrics.mjs'
 
-const BATCH_SIZE = 25
+const BATCH_SIZE = 10
 const MAX_WORDS = 25
+const MAX_RETRIES = 2 // extra attempts for failing ids, after the first try
+const SEED = 2026 // change this to get a different (but still repeatable) mix
+
+// Variety limits (see storyMetrics.mjs for how phrases are counted).
+const OPENING_SHARE_LIMIT = 0.1 // no two-word opening in more than 10% of stories
+const PHRASE4_LIMIT = 5 // no 4-word phrase in more than 5 stories
+const NEAR_DUPLICATE = 0.5 // share of shared 3-word phrases that counts as a copy
 
 // Schedule numbers from protocol.json that any story may mention.
 const SCHEDULE = { officeVisits: 7, phoneVisits: 6, weeks: 29 }
@@ -33,11 +49,41 @@ const outputUrl = new URL('../public/data/stories.json', import.meta.url)
 const villagers = JSON.parse(readFileSync(villagersUrl, 'utf-8'))
 const protocol = JSON.parse(readFileSync(protocolUrl, 'utf-8'))
 
+const OPENING_LIMIT = Math.floor(OPENING_SHARE_LIMIT * villagers.length) // 10 for 100 villagers
+
 // ---------------------------------------------------------------------------
-// 1. Build the structured fields for each villager (nothing else is sent).
+// 1. Seeded random numbers (mulberry32, same idea as runSim.js)
+// ---------------------------------------------------------------------------
+
+function mulberry32(seed) {
+  let t = seed >>> 0
+  return function () {
+    t = (t + 0x6d2b79f5) >>> 0
+    let r = Math.imul(t ^ (t >>> 15), 1 | t)
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296
+  }
+}
+const random = mulberry32(SEED)
+const pick = (list) => list[Math.floor(random() * list.length)]
+const randomInt = (min, max) => min + Math.floor(random() * (max - min + 1))
+
+// Fisher-Yates shuffle (returns a new array).
+function shuffle(list) {
+  const copy = [...list]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
+// ---------------------------------------------------------------------------
+// 2. Build the structured fields for each villager (nothing else is sent).
 // ---------------------------------------------------------------------------
 
 // Baseline run: all toggles off, same seed as the demo.
+// runSim only lists burdens that are bigger than zero, so every burden here is real.
 const baseline = runSim(
   villagers,
   protocol,
@@ -58,7 +104,30 @@ const ENGLISH_LABELS = {
   4: 'not at all',
 }
 
+// Tone only. A voice changes HOW something is said, never WHAT is true.
+const VOICES = {
+  'matter-of-fact': 'plain and factual, no emotion words',
+  tired: 'a little weary, like the schedule wears on them',
+  wry: 'dry, lightly ironic, never jokey or mean',
+  practical: 'focused on how they would fit it in or work around it',
+  hopeful: 'wants to make it work despite the burden',
+  brief: 'clipped and short',
+}
+
+// Give every villager a voice, a focus and a target length (in id order, so
+// the same seed always gives the same assignment).
+const styleById = {}
+for (const v of villagers) {
+  const burdens = topBurdensById[v.id]
+  const voice = pick(Object.keys(VOICES))
+  // Focus: top burden or second burden (only if they have a second one).
+  const focus = burdens.length > 1 && random() < 0.5 ? burdens[1] : burdens[0]
+  const targetWords = voice === 'brief' ? randomInt(8, 12) : randomInt(10, MAX_WORDS)
+  styleById[v.id] = { voice, focus, targetWords }
+}
+
 function fieldsFor(v) {
+  const style = styleById[v.id]
   return {
     id: v.id,
     age: v.AGEP,
@@ -68,18 +137,54 @@ function fieldsFor(v) {
     work_hours: v.WKHP,
     english_proficiency: ENGLISH_LABELS[v.ENG] ?? 'unknown',
     topBurdens: topBurdensById[v.id],
+    focus: style.focus,
+    voice: `${style.voice} (${VOICES[style.voice]})`,
+    target_words: style.targetWords,
   }
 }
 
 // ---------------------------------------------------------------------------
-// 2. The prompt
+// 3. Ban list: the most repeated phrases from the first run (npm run
+//    stories:metrics on the old stories.json), plus the burden labels copied
+//    word for word. Used in the prompt AND the validator.
+// ---------------------------------------------------------------------------
+
+const BANNED_PHRASES = [
+  // top 3-word phrases
+  'children at home', '7 office visits', 'seven office visits', 'and office visits',
+  'while fasting labs', 'visits take time', 'clash with my', 'fasting labs clash',
+  'labs clash with', 'clinic trips and', 'trips and office',
+  // top 4-word phrases
+  'fasting labs clash with', 'trips and office visits', 'labs clash with my',
+  '20-minute clinic trips and', 'and office visits take', '20-minute trips each way',
+  '20-minute trip each way', 'office visits take time', 'with my work schedule',
+  'for 7 office visits',
+  // burden labels copied word for word
+  'travel and visit time', 'lost work hours', 'language barrier',
+]
+
+// True if the story contains the phrase as whole words.
+function hasPhrase(story, phrase) {
+  return ` ${toWords(story).join(' ')} `.includes(` ${phrase} `)
+}
+
+// ---------------------------------------------------------------------------
+// 4. The prompt
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You write short, illustrative first-person lines for characters in a clinical trial simulation game.
 You never use tools, never read or write files, and never run commands. You only reply with JSON.`
 
-function buildPrompt(batch) {
-  return `Here is a JSON list of fictional villagers. Each has only these fields:
+// batch: villagers to write for. feedback: {id: "why the last try failed"}.
+// avoidOpenings: openings that are already used too often.
+function buildPrompt(batch, feedback, avoidOpenings) {
+  const items = batch.map((v) => {
+    const f = fieldsFor(v)
+    if (feedback[v.id]) f.previous_attempt_problem = feedback[v.id]
+    return f
+  })
+
+  return `Here is a JSON list of fictional villagers. Each has only these facts:
 - age (years)
 - commute_minutes (roughly how long their one-way trip to the clinic takes)
 - has_vehicle (true/false)
@@ -88,25 +193,45 @@ function buildPrompt(batch) {
 - english_proficiency (how well they speak English)
 - topBurdens (the biggest ways the trial schedule weighs on them, biggest first)
 
+Each villager also has writing instructions (these are NOT facts about them):
+- focus: the one burden this story is mainly about
+- voice: the tone to write in
+- target_words: aim for about this many words
+- previous_attempt_problem (only sometimes): why their last story was rejected; fix it
+
 The trial schedule: ${SCHEDULE.officeVisits} office visits and ${SCHEDULE.phoneVisits} telephone visits over about ${SCHEDULE.weeks} weeks.
 
 For EACH villager write one story with these rules:
-- Exactly one sentence, at most ${MAX_WORDS} words, written in first person ("I", "my").
-- About how the trial schedule affects them, focused on their topBurdens.
-- Use only the supplied fields. Do not invent jobs, places, family details, or feelings beyond them.
+- Exactly one sentence, at most ${MAX_WORDS} words, written in first person ("I", "my", "me").
+- About how the trial schedule affects them, mainly through their focus burden.
+- Describe the burden in your own everyday words. Do not copy the burden label text.
+- Use only the supplied facts. Do not invent jobs, places, family details, health details, or events.
+- Tone may follow the assigned voice, but add no new facts.
 - Do not include names, race, ethnicity, nationality, religion, diagnoses, diseases, medications, or medical advice.
 - Do not use any number unless it is one of that villager's supplied numbers or a trial schedule number above.
+- Do not start most stories with "My" followed by the commute time.
+
+Variety rules (important):
+- Every story in this list must start with a DIFFERENT first word from the others in this list.
+- Every story must use a different sentence structure from the others in this list
+  (for example: start with the burden, start with a time, start with "I", start with a contrast word, start with what they would need).
+- Never use any of these overused phrases: ${BANNED_PHRASES.map((p) => `"${p}"`).join(', ')}.${
+    avoidOpenings.length > 0
+      ? `\n- Never start a story with any of these openings, they are used up: ${avoidOpenings.map((p) => `"${p}"`).join(', ')}.`
+      : ''
+  }
 
 Reply with ONLY a JSON array, no prose and no code fences, in this exact shape:
 [{"id": 1, "story": "..."}, ...]
 Include every id below exactly once.
 
 Villagers:
-${JSON.stringify(batch.map(fieldsFor), null, 2)}`
+${JSON.stringify(items, null, 2)}`
 }
 
 // ---------------------------------------------------------------------------
-// 3. Validation
+// 5. Validation, part 1: SAFETY rules. A story that breaks any of these is
+//    never kept, no matter how many retries fail.
 // ---------------------------------------------------------------------------
 
 // Words we never want in a story (whole-word, case-insensitive).
@@ -140,8 +265,8 @@ const ALLOWED_CAPITALS = new Set([
   'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
 ])
 
-// Returns a list of problems with one story (empty list means it passed).
-function checkStory(story, v) {
+// Returns a list of safety problems with one story (empty list means it passed).
+function checkSafety(story, v) {
   const problems = []
   if (typeof story !== 'string' || story.trim() === '') return ['empty story']
   const text = story.trim()
@@ -171,6 +296,61 @@ function checkStory(story, v) {
   return problems
 }
 
+// ---------------------------------------------------------------------------
+// 6. Validation, part 2: VARIETY rules, checked against every story accepted
+//    so far (across all batches). If all retries fail these, we keep the
+//    attempt with the fewest variety problems.
+// ---------------------------------------------------------------------------
+
+const accepted = {} // id -> story
+const openingCounts = new Map() // "my 20-minute" -> how many accepted stories start this way
+const phrase4Counts = new Map() // 4-word phrase -> how many accepted stories contain it
+
+function checkVariety(story, id) {
+  const problems = []
+
+  const opening = openingOf(story)
+  if ((openingCounts.get(opening) ?? 0) >= OPENING_LIMIT) problems.push(`opening "${opening}" is overused`)
+
+  for (const phrase of BANNED_PHRASES) {
+    if (hasPhrase(story, phrase)) problems.push(`uses banned phrase "${phrase}"`)
+  }
+
+  for (const phrase of phrasesOf(story, 4)) {
+    if ((phrase4Counts.get(phrase) ?? 0) >= PHRASE4_LIMIT) problems.push(`phrase "${phrase}" is overused`)
+  }
+
+  // Near-duplicate: shares too many 3-word phrases with an accepted story.
+  const mine = phrasesOf(story, 3)
+  for (const [otherId, other] of Object.entries(accepted)) {
+    if (Number(otherId) === id) continue
+    const theirs = phrasesOf(other, 3)
+    let shared = 0
+    for (const p of mine) if (theirs.has(p)) shared++
+    const smaller = Math.min(mine.size, theirs.size)
+    if (smaller > 0 && shared / smaller >= NEAR_DUPLICATE) {
+      problems.push(`too similar to story ${otherId}`)
+      break
+    }
+  }
+  return problems
+}
+
+// Save a story and update the running counts.
+function accept(id, story) {
+  accepted[id] = story
+  const opening = openingOf(story)
+  openingCounts.set(opening, (openingCounts.get(opening) ?? 0) + 1)
+  for (const phrase of phrasesOf(story, 4)) {
+    phrase4Counts.set(phrase, (phrase4Counts.get(phrase) ?? 0) + 1)
+  }
+}
+
+// Openings that have reached the limit, to warn the model up front.
+function usedUpOpenings() {
+  return [...openingCounts.entries()].filter(([, c]) => c >= OPENING_LIMIT).map(([k]) => k)
+}
+
 // Pull a JSON array out of the reply (tolerates code fences or stray prose).
 function parseReply(text) {
   const start = text.indexOf('[')
@@ -182,7 +362,7 @@ function parseReply(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Ask Droid for one batch and keep the stories that pass.
+// 7. Talking to Droid
 // ---------------------------------------------------------------------------
 
 // Droid runs in an empty temp folder with tools locked down, so it can only
@@ -209,73 +389,102 @@ const RUN_OPTIONS = {
   disableBuiltinSkills: true,
 }
 
-// Returns { good: {id: story}, failedIds: [...] }
-async function generateBatch(batch) {
-  const byId = new Map(batch.map((v) => [v.id, v]))
-  const allIds = batch.map((v) => v.id)
-
+// One fresh Droid session. Returns {id: story} for the ids that came back
+// exactly once (anything else is treated as missing).
+async function askDroid(batch, feedback) {
   let reply
   try {
-    const result = await run(buildPrompt(batch), RUN_OPTIONS)
+    const result = await run(buildPrompt(batch, feedback, usedUpOpenings()), RUN_OPTIONS)
     if (!result.success) {
       console.log(`  run failed: ${result.error?.message ?? result.subtype}`)
-      return { good: {}, failedIds: allIds }
+      return {}
     }
     reply = parseReply(result.text)
   } catch (err) {
     console.log(`  error: ${err.message}`)
-    return { good: {}, failedIds: allIds }
+    return {}
   }
 
-  // Count how many times each id came back.
   const counts = new Map()
   for (const item of reply) counts.set(item?.id, (counts.get(item?.id) ?? 0) + 1)
 
-  const good = {}
-  const failedIds = []
-  for (const id of allIds) {
-    if (counts.get(id) !== 1) {
-      console.log(`  id ${id}: returned ${counts.get(id) ?? 0} times`)
-      failedIds.push(id)
-      continue
+  const storiesById = {}
+  for (const v of batch) {
+    if (counts.get(v.id) === 1) storiesById[v.id] = reply.find((item) => item.id === v.id).story
+    else console.log(`  id ${v.id}: returned ${counts.get(v.id) ?? 0} times`)
+  }
+  return storiesById
+}
+
+// Write one batch: first try plus up to MAX_RETRIES retries of only the
+// failing ids. Returns the ids that never produced a safe story.
+async function generateBatch(batch) {
+  const best = {} // id -> { story, problems } : safest attempt with fewest variety problems
+  const feedback = {} // id -> why the last attempt failed (sent with the retry)
+  let pending = batch
+
+  for (let attempt = 0; attempt <= MAX_RETRIES && pending.length > 0; attempt++) {
+    if (attempt > 0) console.log(`  retry ${attempt}: ${pending.length} villager(s)`)
+    const storiesById = await askDroid(pending, feedback)
+
+    const stillFailing = []
+    for (const v of pending) {
+      const raw = storiesById[v.id]
+      if (raw === undefined) {
+        feedback[v.id] = 'your story was missing from the reply'
+        stillFailing.push(v)
+        continue
+      }
+      const story = typeof raw === 'string' ? raw.trim() : raw
+
+      const safety = checkSafety(story, v)
+      if (safety.length > 0) {
+        console.log(`  id ${v.id} unsafe: ${safety.join(', ')} -> ${JSON.stringify(story)}`)
+        feedback[v.id] = safety.join('; ')
+        stillFailing.push(v)
+        continue
+      }
+
+      const variety = checkVariety(story, v.id)
+      if (variety.length === 0) {
+        accept(v.id, story)
+        continue
+      }
+      console.log(`  id ${v.id} repetitive: ${variety.join(', ')} -> ${JSON.stringify(story)}`)
+      feedback[v.id] = variety.join('; ')
+      if (!best[v.id] || variety.length < best[v.id].problems.length) {
+        best[v.id] = { story, problems: variety }
+      }
+      stillFailing.push(v)
     }
-    const story = reply.find((item) => item.id === id).story
-    const problems = checkStory(story, byId.get(id))
-    if (problems.length > 0) {
-      console.log(`  id ${id}: ${problems.join(', ')} -> ${JSON.stringify(story)}`)
-      failedIds.push(id)
+    pending = stillFailing
+  }
+
+  // Out of retries: keep the best SAFE attempt, or skip the villager.
+  const skippedIds = []
+  for (const v of pending) {
+    if (best[v.id]) {
+      console.log(`  id ${v.id}: keeping best attempt (${best[v.id].problems.join(', ')})`)
+      accept(v.id, best[v.id].story)
     } else {
-      good[id] = story.trim()
+      skippedIds.push(v.id)
     }
   }
-  const extra = [...counts.keys()].filter((id) => !byId.has(id))
-  if (extra.length > 0) console.log(`  ignored unexpected ids: ${extra.join(', ')}`)
-
-  return { good, failedIds }
+  return skippedIds
 }
 
 // ---------------------------------------------------------------------------
-// 5. Main: batches of 25, retry failures once, then skip them.
+// 8. Main: shuffle, batches of 10, one fresh session per batch (and per retry).
 // ---------------------------------------------------------------------------
 
-const stories = {}
 const skipped = []
+const order = shuffle(villagers)
 
 try {
-  for (let i = 0; i < villagers.length; i += BATCH_SIZE) {
-    const batch = villagers.slice(i, i + BATCH_SIZE)
-    console.log(`Batch ${i / BATCH_SIZE + 1}: ids ${batch[0].id}-${batch[batch.length - 1].id}`)
-
-    const first = await generateBatch(batch)
-    Object.assign(stories, first.good)
-
-    if (first.failedIds.length > 0) {
-      console.log(`  retrying ${first.failedIds.length} villager(s) once`)
-      const retryBatch = batch.filter((v) => first.failedIds.includes(v.id))
-      const second = await generateBatch(retryBatch)
-      Object.assign(stories, second.good)
-      skipped.push(...second.failedIds)
-    }
+  for (let i = 0; i < order.length; i += BATCH_SIZE) {
+    const batch = order.slice(i, i + BATCH_SIZE)
+    console.log(`Batch ${i / BATCH_SIZE + 1}: ids ${batch.map((v) => v.id).join(', ')}`)
+    skipped.push(...(await generateBatch(batch)))
   }
 } finally {
   rmSync(sandboxDir, { recursive: true, force: true })
@@ -283,7 +492,7 @@ try {
 
 // Keep ids in numeric order in the file.
 const sorted = {}
-for (const v of villagers) if (stories[v.id]) sorted[v.id] = stories[v.id]
+for (const v of villagers) if (accepted[v.id]) sorted[v.id] = accepted[v.id]
 
 // Don't overwrite a good file with an empty one if every batch failed.
 if (Object.keys(sorted).length === 0) {
@@ -301,3 +510,6 @@ writeFileSync(outputUrl, JSON.stringify(output, null, 2) + '\n')
 
 console.log(`\nWrote ${Object.keys(sorted).length} of ${villagers.length} stories to public/data/stories.json`)
 if (skipped.length > 0) console.log(`Skipped ids: ${skipped.join(', ')}`)
+
+console.log('\n--- Repetition metrics for the new file ---')
+printMetrics(measure(Object.values(sorted)))

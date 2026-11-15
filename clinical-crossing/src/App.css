@@ -260,6 +260,36 @@ button.house {
   font-weight: 700;
 }
 
+/* Villager story (AI-written fiction) and the real model burdens under it */
+.bubble:has(.bubble-story) {
+  width: 240px;
+}
+
+.bubble-story {
+  font-style: italic;
+}
+
+.bubble-story-label {
+  margin-top: 2px !important;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.bubble-burdens {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.footer {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 /* Near the top edge: open below instead */
 .bubble-below {
   bottom: auto;

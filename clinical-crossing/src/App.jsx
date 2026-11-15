@@ -7,6 +7,8 @@ import './App.css'
 // BASE_URL keeps the paths right if the site is deployed under a sub-folder.
 const VILLAGERS_URL = `${import.meta.env.BASE_URL}data/villagers.json`
 const PROTOCOL_URL = `${import.meta.env.BASE_URL}protocol.json`
+// Optional. AI-written fiction made at build time by scripts/droidStories.mjs.
+const STORIES_URL = `${import.meta.env.BASE_URL}data/stories.json`
 
 // Same seed as scripts/checkSim.js, so the faded villagers match its sampled run.
 const SEED = 42
@@ -24,6 +26,7 @@ function App() {
   const [data, setData] = useState(null) // { villagers, protocol }
   const [toggles, setToggles] = useState(ALL_OFF)
   const [error, setError] = useState(null)
+  const [stories, setStories] = useState({}) // villager id -> story text; {} = no stories
 
   // Load the data once when the page opens.
   useEffect(() => {
@@ -35,6 +38,13 @@ function App() {
       .catch((err) => {
         if (!cancelled) setError(err.message)
       })
+    // Stories are optional and loaded on their own. If the file is missing or
+    // broken we keep {} and the bubbles fall back to plain-language burdens.
+    loadJson(STORIES_URL)
+      .then((file) => {
+        if (!cancelled && file && typeof file.stories === 'object') setStories(file.stories)
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -91,8 +101,13 @@ function App() {
           </section>
 
           <Toggles toggles={toggles} onChange={setToggles} />
-          <Board villagers={data.villagers} results={current.villagers} baselineResults={baseline.villagers} />
+          <Board villagers={data.villagers} results={current.villagers} baselineResults={baseline.villagers} stories={stories} />
         </>
+      )}
+
+      {/* Only credit the stories when they actually loaded. */}
+      {Object.keys(stories).length > 0 && (
+        <footer className="footer">Stories generated at build time with the Factory Droid SDK.</footer>
       )}
     </main>
   )
