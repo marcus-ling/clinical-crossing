@@ -18,8 +18,13 @@ const protocol = JSON.parse(readFileSync(protocolUrl, 'utf-8'))
 const SEED = 42
 const TARGET = 0.87 // published VIVID completion, 365 of 420 (PMC7065168)
 
-const OFF = { weekendVisits: false, homeBloodDraws: false, noFasting: false }
-const ALL_ON = { weekendVisits: true, homeBloodDraws: true, noFasting: true }
+// The three original what-if toggles are now levers (see src/sim/levers.js).
+// Checked at "large" strength, the closest match to the old on/off switches.
+const OFF = []
+const WEEKEND = [{ id: 'weekendEveningHours', strength: 'large' }]
+const HOME_DRAWS = [{ id: 'homeBloodDraws', strength: 'large' }]
+const NO_FASTING = [{ id: 'relaxedFasting', strength: 'large' }]
+const ALL_ON = [...WEEKEND, ...HOME_DRAWS, ...NO_FASTING]
 
 // ---------------------------------------------------------------------------
 // Calibration: bisection on `a`. Higher `a` means more dropout, so retention
@@ -49,12 +54,12 @@ function check(name, ok) {
   if (!ok) failures += 1
 }
 
-const retention = (toggles) => runSim(villagers, protocol, toggles, SEED).expectedRetention
+const retention = (levers) => runSim(villagers, protocol, levers, SEED).expectedRetention
 
 const baseline = retention(OFF)
-const weekend = retention({ ...OFF, weekendVisits: true })
-const homeDraws = retention({ ...OFF, homeBloodDraws: true })
-const noFasting = retention({ ...OFF, noFasting: true })
+const weekend = retention(WEEKEND)
+const homeDraws = retention(HOME_DRAWS)
+const noFasting = retention(NO_FASTING)
 const allOn = retention(ALL_ON)
 
 // 1. Baseline near the published completion rate
@@ -96,8 +101,8 @@ console.log(`  sampled baseline ${pct(run1.sampledRetention)}  (seed ${SEED}, no
 // ---------------------------------------------------------------------------
 const noVehicleIds = new Set(villagers.filter((v) => v.VEH === 0).map((v) => v.id))
 
-function groupRetention(toggles) {
-  const results = runSim(villagers, protocol, toggles, SEED).villagers
+function groupRetention(levers) {
+  const results = runSim(villagers, protocol, levers, SEED).villagers
   let sumNo = 0
   let sumRest = 0
   for (const r of results) {
@@ -109,14 +114,14 @@ function groupRetention(toggles) {
 
 const scenarios = [
   ['baseline', OFF],
-  ['weekendVisits', { ...OFF, weekendVisits: true }],
-  ['homeBloodDraws', { ...OFF, homeBloodDraws: true }],
-  ['noFasting', { ...OFF, noFasting: true }],
+  ['weekendVisits', WEEKEND],
+  ['homeBloodDraws', HOME_DRAWS],
+  ['noFasting', NO_FASTING],
   ['all three on', ALL_ON],
 ]
 console.log(`\nNo-vehicle villagers (n=${noVehicleIds.size}) vs the rest (n=${villagers.length - noVehicleIds.size}):`)
-for (const [name, toggles] of scenarios) {
-  const g = groupRetention(toggles)
+for (const [name, levers] of scenarios) {
+  const g = groupRetention(levers)
   const gap = ((g.rest - g.noVehicle) * 100).toFixed(1)
   console.log(`  ${name.padEnd(16)} no vehicle ${pct(g.noVehicle)}   rest ${pct(g.rest)}   gap ${gap} pts`)
 }

@@ -6,6 +6,11 @@
 //   npm run stories
 // (which runs: node --env-file=.env scripts/droidStories.mjs)
 //
+// NOTE: @factory/droid-sdk was uninstalled on 2026-11-15 (sponsored access
+// ended; it also pulled in a vulnerable zod 3). stories.json is already
+// generated and the app does not need the SDK. To regenerate stories:
+//   npm install --save-dev @factory/droid-sdk   (and set FACTORY_API_KEY in .env)
+//
 // The Droid SDK reads FACTORY_API_KEY from the environment by itself.
 // This script never reads, logs, or writes the key.
 //
@@ -39,7 +44,7 @@ const PHRASE4_LIMIT = 5 // no 4-word phrase in more than 5 stories
 const NEAR_DUPLICATE = 0.5 // share of shared 3-word phrases that counts as a copy
 
 // Schedule numbers from protocol.json that any story may mention.
-const SCHEDULE = { officeVisits: 7, phoneVisits: 6, weeks: 29 }
+const SCHEDULE = { totalVisits: 17, officeVisits: 7, phoneVisits: 6, weeks: 29 }
 
 // Find the data files relative to this script, not the folder node was started in.
 const villagersUrl = new URL('../public/data/villagers.json', import.meta.url)
@@ -82,14 +87,9 @@ function shuffle(list) {
 // 2. Build the structured fields for each villager (nothing else is sent).
 // ---------------------------------------------------------------------------
 
-// Baseline run: all toggles off, same seed as the demo.
+// Baseline run: no policy levers ([]), same seed as the demo.
 // runSim only lists burdens that are bigger than zero, so every burden here is real.
-const baseline = runSim(
-  villagers,
-  protocol,
-  { weekendVisits: false, homeBloodDraws: false, noFasting: false },
-  42
-)
+const baseline = runSim(villagers, protocol, [], 42)
 const topBurdensById = {}
 for (const r of baseline.villagers) {
   topBurdensById[r.id] = r.topBurdens.map((name) => BURDEN_LABELS[name])
@@ -114,17 +114,141 @@ const VOICES = {
   brief: 'clipped and short',
 }
 
+// Income band from PINCP (personal income, dollars). Only the band is sent,
+// never the dollar amount. The cutoffs are an ASSUMPTION for wording only.
+function incomeBand(v) {
+  if (v.PINCP <= 0) return 'no personal income'
+  if (v.PINCP < 30000) return 'lower income'
+  if (v.PINCP < 75000) return 'middle income'
+  return 'higher income'
+}
+
+// Limited English: same cutoff where runSim starts scoring a language burden (ENG 2+).
+const limitedEnglish = (v) => v.ENG >= 2
+
+// Generic worries many people have about joining ANY trial. These are not in
+// the census data: code assigns them at random, so they are illustrative only.
+// None of them may be tied to race, ethnicity, religion or history.
+const WORRIES = [
+  'getting a placebo instead of the real treatment, because the group is chosen at random',
+  'possible side effects of an experimental treatment',
+  'being treated like a test subject rather than a person',
+  'long, hard-to-read consent paperwork',
+  'not hearing back from the study team between visits',
+  'never having heard of trials like this until now',
+  'nobody at their usual clinic ever mentioning trials',
+  'not being sure the research system has their interests at heart',
+]
+
+// Every kind of focus a story can have, with how often to pick it.
+// eligible(v) says whether the villager's own facts support that kind.
+// text(v) is the focus instruction sent to the model.
+const FOCUS_KINDS = [
+  {
+    kind: 'burden', // one of their sim burdens (top or second)
+    weight: 35,
+    eligible: () => true,
+    text: (v) => {
+      const burdens = topBurdensById[v.id]
+      return burdens.length > 1 && random() < 0.5 ? burdens[1] : burdens[0]
+    },
+  },
+  {
+    kind: 'money', // costs that follow from their own fields
+    weight: 20,
+    eligible: (v) => v.WKHP > 0 || v.HUPAC !== 4 || v.JWMNP > 0,
+    text: (v) => {
+      const parts = [incomeBand(v)]
+      if (v.WKHP > 0) parts.push('missed work hours may mean missed pay')
+      if (v.HUPAC !== 4) parts.push('childcare during visits can cost money')
+      if (v.JWMNP > 0) parts.push(v.VEH > 0 ? 'gas and parking for clinic trips' : 'fares or rides for clinic trips')
+      return `money: ${parts.join('; ')}`
+    },
+  },
+  {
+    kind: 'trial demands', // facts from protocol.json, the same for everyone
+    weight: 15,
+    eligible: () => true,
+    text: () =>
+      `the trial's own demands: ${SCHEDULE.totalVisits} visits over about ${SCHEDULE.weeks} weeks, ` +
+      'some study tasks must be done on their own with nobody allowed to do them for them, ' +
+      'and some lab visits may require fasting',
+  },
+  {
+    kind: 'communication', // only when the data says English is limited
+    weight: 10,
+    eligible: limitedEnglish,
+    text: () => 'communication: following phone check-ins, instructions and trial paperwork with limited English',
+  },
+  {
+    kind: 'worry', // illustrative, NOT from the data
+    weight: 20,
+    eligible: () => true,
+    text: () => `worry: ${worryDeck.pop()}`, // dealt from the deck built below
+  },
+]
+
+// Weighted random pick among the focus kinds this villager is eligible for.
+// Villagers with limited English ALWAYS get the communication focus.
+function pickFocusKind(v) {
+  if (limitedEnglish(v)) return FOCUS_KINDS.find((f) => f.kind === 'communication')
+  const options = FOCUS_KINDS.filter((f) => f.eligible(v) && f.kind !== 'communication')
+  const total = options.reduce((sum, f) => sum + f.weight, 0)
+  let roll = random() * total
+  for (const f of options) {
+    roll -= f.weight
+    if (roll < 0) return f
+  }
+  return options[options.length - 1]
+}
+
+// Build a shuffled "deck" of worries with roughly equal counts, plus a little
+// variation so some worries are more common than others (and the player has
+// something to prioritize). Example with 24 worry villagers and 8 worries:
+// everyone starts at 3, then a few random moves give counts like 2, 3, 4, 5.
+const WORRY_SHIFTS = 4 // how many times one villager moves from one worry to another
+function buildWorryDeck(count) {
+  const counts = WORRIES.map(() => Math.floor(count / WORRIES.length))
+  // Hand out the leftover villagers one at a time to random worries.
+  for (let i = 0; i < count % WORRIES.length; i++) counts[Math.floor(random() * WORRIES.length)]++
+  // Random variation: move one villager from one worry to another (never below 1).
+  for (let i = 0; i < WORRY_SHIFTS; i++) {
+    const from = Math.floor(random() * WORRIES.length)
+    const to = Math.floor(random() * WORRIES.length)
+    if (from !== to && counts[from] > 1) {
+      counts[from]--
+      counts[to]++
+    }
+  }
+  const deck = []
+  WORRIES.forEach((w, i) => {
+    for (let n = 0; n < counts[i]; n++) deck.push(w)
+  })
+  return shuffle(deck)
+}
+
 // Give every villager a voice, a focus and a target length (in id order, so
 // the same seed always gives the same assignment).
+// Pass 1 picks the KIND of focus; pass 2 fills in the focus text, after we
+// know how many worry villagers there are so the worry deck can be built.
 const styleById = {}
 for (const v of villagers) {
-  const burdens = topBurdensById[v.id]
   const voice = pick(Object.keys(VOICES))
-  // Focus: top burden or second burden (only if they have a second one).
-  const focus = burdens.length > 1 && random() < 0.5 ? burdens[1] : burdens[0]
+  const focusKind = pickFocusKind(v)
   const targetWords = voice === 'brief' ? randomInt(8, 12) : randomInt(10, MAX_WORDS)
-  styleById[v.id] = { voice, focus, targetWords }
+  styleById[v.id] = { voice, focusKind: focusKind.kind, targetWords }
 }
+const worryCount = villagers.filter((v) => styleById[v.id].focusKind === 'worry').length
+const worryDeck = buildWorryDeck(worryCount)
+for (const v of villagers) {
+  const style = styleById[v.id]
+  style.focus = FOCUS_KINDS.find((f) => f.kind === style.focusKind).text(v)
+}
+
+// Show the mix so it's easy to check (no personal data, just counts).
+const tally = (list) => list.reduce((t, x) => ({ ...t, [x]: (t[x] ?? 0) + 1 }), {})
+console.log('Focus kinds:', tally(villagers.map((v) => styleById[v.id].focusKind)))
+console.log('Worries:', tally(villagers.filter((v) => styleById[v.id].focusKind === 'worry').map((v) => styleById[v.id].focus.slice(7))))
 
 function fieldsFor(v) {
   const style = styleById[v.id]
@@ -136,6 +260,7 @@ function fieldsFor(v) {
     has_children_at_home: v.HUPAC !== 4, // same rule as runSim
     work_hours: v.WKHP,
     english_proficiency: ENGLISH_LABELS[v.ENG] ?? 'unknown',
+    income_band: incomeBand(v),
     topBurdens: topBurdensById[v.id],
     focus: style.focus,
     voice: `${style.voice} (${VOICES[style.voice]})`,
@@ -191,24 +316,34 @@ function buildPrompt(batch, feedback, avoidOpenings) {
 - has_children_at_home (true/false)
 - work_hours (hours worked per week; 0 means they do not work)
 - english_proficiency (how well they speak English)
+- income_band (rough personal income level; never turn it into a dollar amount)
 - topBurdens (the biggest ways the trial schedule weighs on them, biggest first)
 
 Each villager also has writing instructions (these are NOT facts about them):
-- focus: the one burden this story is mainly about
+- focus: what this story is mainly about. It is one of these kinds:
+  * a burden from their topBurdens
+  * "money: ..." costs that follow from their facts
+  * "the trial's own demands: ..." facts about this trial that apply to everyone
+  * "communication: ..." trouble following the trial in English
+  * "worry: ..." a common worry people have about joining a trial
 - voice: the tone to write in
 - target_words: aim for about this many words
 - previous_attempt_problem (only sometimes): why their last story was rejected; fix it
 
-The trial schedule: ${SCHEDULE.officeVisits} office visits and ${SCHEDULE.phoneVisits} telephone visits over about ${SCHEDULE.weeks} weeks.
+The trial: ${SCHEDULE.totalVisits} visits in total (${SCHEDULE.officeVisits} confirmed office visits and ${SCHEDULE.phoneVisits} telephone visits among them) over about ${SCHEDULE.weeks} weeks.
 
 For EACH villager write one story with these rules:
 - Exactly one sentence, at most ${MAX_WORDS} words, written in first person ("I", "my", "me").
-- About how the trial schedule affects them, mainly through their focus burden.
-- Describe the burden in your own everyday words. Do not copy the burden label text.
+- About what makes joining or staying in the trial hard for them, mainly through their focus.
+- Describe the focus in your own everyday words. Do not copy the focus or burden label text.
+- Only mention driving, the commute, travel or trip length when the focus is about travel or travel costs.
+- If the focus starts with "worry:", write it as a worry or question about joining ("what if...", "I'd wonder whether..."),
+  never as something that already happened to them. Never link a worry to race, ethnicity, religion, or history.
 - Use only the supplied facts. Do not invent jobs, places, family details, health details, or events.
 - Tone may follow the assigned voice, but add no new facts.
 - Do not include names, race, ethnicity, nationality, religion, diagnoses, diseases, medications, or medical advice.
-- Do not use any number unless it is one of that villager's supplied numbers or a trial schedule number above.
+- Never use these words: drug, drugs, medicine, medication, doctor, dose, insulin, diabetes (say "treatment", "clinic", "study team" instead).
+- Do not use any number unless it is one of that villager's supplied numbers or a trial number above. No dollar amounts.
 - Do not start most stories with "My" followed by the commute time.
 
 Variety rules (important):
@@ -244,6 +379,8 @@ const BANNED_WORDS = [
   // religion
   'religion', 'religious', 'church', 'mosque', 'temple', 'synagogue', 'christian', 'muslim',
   'jewish', 'hindu', 'buddhist', 'god', 'pray', 'prayer', 'faith', 'sabbath',
+  // history / discrimination (worries must stay generic, never tied to group history)
+  'history', 'historical', 'racism', 'racist', 'discrimination', 'tuskegee', 'segregation',
   // diagnoses / medical advice
   'diabetes', 'diabetic', 'insulin', 'glucose', 'diagnosis', 'diagnosed', 'disease', 'illness',
   'cancer', 'medication', 'medications', 'medicine', 'prescription', 'dose', 'dosage', 'drug',
@@ -258,6 +395,13 @@ const NUMBER_WORDS = {
   sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100, dozen: 12,
 }
 
+// For compound numbers like "twenty-five" or "forty one".
+const UNIT_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 }
+const COMPOUND_NUMBER_RE = new RegExp(
+  `\\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[- ](${Object.keys(UNIT_WORDS).join('|')})\\b`,
+  'g'
+)
+
 // Capitalized words that are fine in the middle of a sentence.
 // Any other mid-sentence capital is treated as a possible name.
 const ALLOWED_CAPITALS = new Set([
@@ -269,7 +413,8 @@ const ALLOWED_CAPITALS = new Set([
 function checkSafety(story, v) {
   const problems = []
   if (typeof story !== 'string' || story.trim() === '') return ['empty story']
-  const text = story.trim()
+  // Treat curly apostrophes like straight ones, so "I’d" is not flagged as a name.
+  const text = story.trim().replace(/[‘’]/g, "'")
   const words = text.split(/\s+/)
 
   if (words.length > MAX_WORDS) problems.push(`${words.length} words`)
@@ -284,7 +429,14 @@ function checkSafety(story, v) {
   for (const digits of text.match(/\d+/g) ?? []) {
     if (!supplied.has(Number(digits))) problems.push(`unsupplied number ${digits}`)
   }
-  for (const w of text.toLowerCase().match(/[a-z]+/g) ?? []) {
+  // Compound number words like "twenty-five" count as ONE number (25), so check
+  // them first and then blank them out before checking single number words.
+  const lower = text.toLowerCase().replace(COMPOUND_NUMBER_RE, (match, tens, unit) => {
+    const value = NUMBER_WORDS[tens] + UNIT_WORDS[unit]
+    if (!supplied.has(value)) problems.push(`unsupplied number "${match}"`)
+    return ' '
+  })
+  for (const w of lower.match(/[a-z]+/g) ?? []) {
     if (w in NUMBER_WORDS && !supplied.has(NUMBER_WORDS[w])) problems.push(`unsupplied number "${w}"`)
   }
 
@@ -503,8 +655,13 @@ if (Object.keys(sorted).length === 0) {
 const output = {
   generatedBy: 'Factory Droid SDK',
   date: new Date().toISOString().slice(0, 10),
-  note: 'Illustrative fiction generated from census-derived fields. Not real people.',
+  note:
+    'Illustrative fiction generated from census-derived fields. Not real people. ' +
+    'Stories with focusKind "worry" use a generic trial worry assigned at random, not from the data, ' +
+    'and only "burden" stories match what the sim scores.',
   stories: sorted,
+  // id -> burden | money | trial demands | communication | worry
+  focusKinds: Object.fromEntries(Object.keys(sorted).map((id) => [id, styleById[id].focusKind])),
 }
 writeFileSync(outputUrl, JSON.stringify(output, null, 2) + '\n')
 

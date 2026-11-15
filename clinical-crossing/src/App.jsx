@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import Board from './components/Board.jsx'
-import Toggles from './components/Toggles.jsx'
+import PolicyForm from './components/PolicyForm.jsx'
+import Results from './components/Results.jsx'
+import AssumptionsPanel from './components/AssumptionsPanel.jsx'
 import { runSim } from './sim/runSim.js'
+import { findPar, scoreRound } from './sim/scoring.js'
+import { interpretPolicies } from './ai/interpret.js'
+import { validatePolicies } from './ai/validate.js'
 import './App.css'
 
 // BASE_URL keeps the paths right if the site is deployed under a sub-folder.
@@ -12,7 +17,7 @@ const STORIES_URL = `${import.meta.env.BASE_URL}data/stories.json`
 
 // Same seed as scripts/checkSim.js, so the faded villagers match its sampled run.
 const SEED = 42
-const ALL_OFF = { weekendVisits: false, homeBloodDraws: false, noFasting: false }
+const EMPTY_POLICIES = ['', '', '']
 
 async function loadJson(url) {
   const res = await fetch(url)
@@ -24,9 +29,13 @@ const pct = (x) => `${Math.round(x * 100)}%`
 
 function App() {
   const [data, setData] = useState(null) // { villagers, protocol }
-  const [toggles, setToggles] = useState(ALL_OFF)
   const [error, setError] = useState(null)
   const [stories, setStories] = useState({}) // villager id -> story text; {} = no stories
+
+  // The game: the player writes 3 policies, we interpret them, then show results.
+  const [policies, setPolicies] = useState(EMPTY_POLICIES)
+  const [busy, setBusy] = useState(false) // waiting for the interpreter
+  const [outcome, setOutcome] = useState(null) // { round, texts, source } once submitted
 
   // Load the data once when the page opens.
   useEffect(() => {
@@ -50,10 +59,28 @@ function App() {
     }
   }, [])
 
-  // Baseline: all toggles off. Current: whatever the switches say.
-  // Both use the same seed, so each villager keeps the same random number.
-  const baseline = useMemo(() => (data ? runSim(data.villagers, data.protocol, ALL_OFF, SEED) : null), [data])
-  const current = useMemo(() => (data ? runSim(data.villagers, data.protocol, toggles, SEED) : null), [data, toggles])
+  // Baseline (no changes) and par (best 3 levers at medium) never change, so work them out once.
+  const baseline = useMemo(() => (data ? runSim(data.villagers, data.protocol, [], SEED) : null), [data])
+  const par = useMemo(() => (data ? findPar(data.villagers, data.protocol, SEED) : null), [data])
+
+  async function handleSubmit() {
+    const texts = validatePolicies(policies)
+    if (!texts) return // the button is disabled in this case anyway
+    setBusy(true)
+    // interpretPolicies never throws: on any problem it uses the offline matcher.
+    const { interpretations, source } = await interpretPolicies(texts)
+    const round = scoreRound(data.villagers, data.protocol, interpretations, par, SEED)
+    setOutcome({ round, texts, source })
+    setBusy(false)
+  }
+
+  function handlePlayAgain() {
+    setOutcome(null)
+    setPolicies(EMPTY_POLICIES)
+  }
+
+  // The town shows the baseline until results arrive, then the new run.
+  const current = outcome ? outcome.round.current : baseline
 
   let rescuedCount = 0
   if (baseline && current) {
@@ -62,13 +89,11 @@ function App() {
     })
   }
 
-  const diffPoints = current && baseline ? (current.expectedRetention - baseline.expectedRetention) * 100 : 0
-
   return (
     <main className="app">
       <header className="header">
         <h1>Clinical Crossing</h1>
-        <span className="illustrative-badge">Illustrative simulation</span>
+        <span className="illustrative-badge">Illustrative simulation, not a prediction</span>
       </header>
 
       {error && <p className="message">{error}</p>}
@@ -76,32 +101,74 @@ function App() {
 
       {data && (
         <>
-          <section className="headline">
-            <div className="scores">
-              <div className="score">
-                <span className="score-label">Baseline</span>
-                <span className="score-number">{pct(baseline.expectedRetention)}</span>
-              </div>
-              <div className="score">
-                <span className="score-label">With changes</span>
-                <span className="score-number">{pct(current.expectedRetention)}</span>
-              </div>
-              <div className="score">
-                <span className="score-label">Difference</span>
-                <span className="score-number">
-                  {diffPoints >= 0 ? '+' : ''}
-                  {diffPoints.toFixed(1)} pts
-                </span>
-              </div>
+          {/* The wooden sign. Before playing it asks the question; after, it shows
+              the before/after numbers. aria-live reads the change out loud. */}
+          <section className="sign" aria-label="Retention" aria-live="polite">
+            <div className="sign-board">
+              {!outcome ? (
+                <>
+                  <h2 className="sign-title">Welcome to town!</h2>
+                  <p className="sign-intro">
+                    Right now, about <strong>{pct(baseline.expectedRetention)}</strong> of villagers are expected to
+                    make it to the end of this diabetes trial. You get three policy changes. Which three would do
+                    the most to open the trial up to more people?
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 className="sign-title">Retention</h2>
+                  <p className="sign-numbers">
+                    <span className="sign-pair">
+                      <span className="sign-label">Before</span> <strong>{pct(baseline.expectedRetention)}</strong>
+                    </span>
+                    <span className="sign-arrow" aria-hidden="true">
+                      →
+                    </span>
+                    <span className="sign-pair">
+                      <span className="sign-label">After</span>{' '}
+                      <strong>{pct(outcome.round.current.expectedRetention)}</strong>
+                    </span>
+                    <span className="sign-diff">
+                      {outcome.round.gain >= 0 ? '+' : ''}
+                      {(outcome.round.gain * 100).toFixed(1)} pts
+                    </span>
+                  </p>
+                  <p className="sign-rescued">
+                    <span className="ring-swatch" aria-hidden="true" />
+                    {rescuedCount === 0
+                      ? 'Nobody new stayed this time'
+                      : `${rescuedCount} villager${rescuedCount === 1 ? '' : 's'} stayed who would have left`}
+                  </p>
+                  <p className="sign-note">
+                    Illustrative. The faded villagers and green rings below are one roll of the dice.
+                  </p>
+                </>
+              )}
             </div>
-            <p className="headline-note">
-              Expected retention. Faded villagers are one random draw; the headline is the expected value.
-              {rescuedCount > 0 && ` ${rescuedCount} villager${rescuedCount === 1 ? '' : 's'} rescued in this draw (green ring).`}
-            </p>
+            <div className="sign-posts" aria-hidden="true" />
           </section>
 
-          <Toggles toggles={toggles} onChange={setToggles} />
-          <Board villagers={data.villagers} results={current.villagers} baselineResults={baseline.villagers} stories={stories} />
+          {outcome && outcome.source === 'offline' && (
+            <p className="offline-banner" role="status">
+              Offline matcher in use. The AI couldn&apos;t be reached, so a simple keyword matcher read your ideas
+              instead.
+            </p>
+          )}
+
+          {outcome ? (
+            <Results round={outcome.round} texts={outcome.texts} source={outcome.source} onPlayAgain={handlePlayAgain} />
+          ) : (
+            <PolicyForm policies={policies} onChange={setPolicies} onSubmit={handleSubmit} busy={busy} />
+          )}
+
+          <Board
+            villagers={data.villagers}
+            results={current.villagers}
+            baselineResults={baseline.villagers}
+            stories={stories}
+          />
+
+          <AssumptionsPanel />
         </>
       )}
 

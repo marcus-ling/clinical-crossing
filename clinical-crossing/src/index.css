@@ -1,19 +1,22 @@
 /* The palette and base styles. Change colors here only. */
 :root {
-  --cream: #fbf5e6; /* page background */
-  --soft-green: #b7d9a8; /* grass */
-  --deep-green: #7fb36f; /* trees */
-  --warm-brown: #b5835a; /* houses */
-  --path: #e8d5b0; /* paths, a light tan */
-  --accent: #f28c6b; /* coral: clinic and highlights */
-  --text: #4a3b2c; /* dark brown text */
+  --sky: #bfe3f0; /* page background */
+  --grass: #8fcb7a; /* grass tiles */
+  --grass-dark: #6baf5b; /* board frame, tree ground */
+  --path: #e8d3a2; /* sandy paths */
+  --wood-dark: #a9783f; /* roofs, sign border, switch track */
+  --wood-light: #d9b27c; /* house walls, sign plank */
+  --ink: #3b2a1a; /* all text and outlines */
+  --rescued: #3e9b4f; /* rescued ring and "on" switches */
+  --paper: #fffdf7; /* speech bubble */
 
   --radius: 10px;
   --font: 'Nunito', system-ui, sans-serif;
 
   font-family: var(--font);
-  color: var(--text);
-  background: var(--cream);
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--sky);
 }
 
 * {
@@ -27,5 +30,5 @@ body {
 
 h1 {
   margin: 0;
-  font-weight: 800;
+  font-weight: 900;
 }

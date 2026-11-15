@@ -1,9 +1,12 @@
 // runSim.js
 // The sim engine. A pure function: no React, no DOM, no fetch.
-// Give it villagers, the protocol, the toggles and a seed; it returns retention.
+// Give it villagers, the protocol, a list of policy levers and a seed;
+// it returns retention.
 //
 // ILLUSTRATIVE ONLY. Burden weights and the slope are assumptions, not
 // published estimates. Only the intercept `a` is tied to a real number.
+
+import { findLever } from './levers.js'
 
 // ---------------------------------------------------------------------------
 // ASSUMPTIONS: every number the sim uses lives here.
@@ -30,7 +33,11 @@ export const ASSUMPTIONS = {
 
   phoneVisitHours: 0.5, // assumption: time cost of one telephone visit (no travel)
   hoursCap: 80, // assumption: trial hours at which the time and work terms max out at 1
-  homeBloodDrawCut: 0.5, // assumption: home blood draws cut travel + time of lab visits by 50%
+
+  // assumption: how much one policy lever shrinks the burden term it targets.
+  // A "medium" lever cuts its term in half. Illustrative, not measured.
+  // Two different levers on the same term multiply (50% then 50% = 75% total).
+  strengthCuts: { small: 0.25, medium: 0.5, large: 0.75 },
 
   // assumption: score for each PUMS ENG code
   // (0 only English, 1 very well, 2 well, 3 not well, 4 not at all)
@@ -95,27 +102,24 @@ function getVisits(protocol) {
 // ---------------------------------------------------------------------------
 // Burden for one villager. Returns each term already scaled 0 to 1.
 // ---------------------------------------------------------------------------
-function burdenTerms(villager, visits, toggles, A) {
+function burdenTerms(villager, visits, A) {
   const works = villager.WKHP > 0
 
   // Round trip to the site. JWMNP (work commute) is a proxy for travel to the site.
   const travelHours = (2 * villager.JWMNP) / 60
 
   // Hours spent on office visits (visit + travel).
+  // (A loop, not a multiply, so the numbers match the original version exactly.)
   let officeHours = 0
-  for (const visit of visits.officeVisits) {
-    let hours = visits.visitDurationHours + travelHours
-    if (toggles.homeBloodDraws && visits.labVisits.includes(visit)) {
-      hours = hours * (1 - A.homeBloodDrawCut)
-    }
-    officeHours += hours
+  for (let i = 0; i < visits.officeVisits.length; i++) {
+    officeHours += visits.visitDurationHours + travelHours
   }
   const phoneHours = visits.phoneVisits.length * A.phoneVisitHours
   const totalHours = officeHours + phoneHours
 
-  // Work hours lost: only for people who work, when visits are weekday-only,
-  // and weekend visits are not offered. Phone calls are assumed to fit around work.
-  const losesWork = works && visits.weekdayOnly && !toggles.weekendVisits
+  // Work hours lost: only for people who work, when visits are weekday-only.
+  // Phone calls are assumed to fit around work.
+  const losesWork = works && visits.weekdayOnly
 
   return {
     travelAndVisitTime: Math.min(1, totalHours / A.hoursCap),
@@ -123,22 +127,51 @@ function burdenTerms(villager, visits, toggles, A) {
     noVehicle: villager.VEH === 0 ? 1 : 0,
     // HUPAC 1, 2, 3 = children under 18 in the household; 4 = none
     childrenAtHome: villager.HUPAC !== 4 ? 1 : 0,
-    fastingConflict: works && visits.fastingLikely && !toggles.noFasting ? 1 : 0,
+    fastingConflict: works && visits.fastingLikely ? 1 : 0,
     languageBarrier: A.languageScoreByEng[villager.ENG] ?? 0,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Policy levers. Each lever shrinks ONE burden term (see levers.js).
+// Returns { termName: multiplier }, e.g. { noVehicle: 0.5 } for a medium
+// transport lever. Terms with no lever are left out (multiplier 1).
+// If the same lever id appears twice, only the stronger one counts.
+// ---------------------------------------------------------------------------
+function termMultipliers(levers, A) {
+  // Strongest cut for each lever id.
+  const cutById = {}
+  for (const { id, strength } of levers) {
+    const lever = findLever(id)
+    const cut = A.strengthCuts[strength]
+    if (!lever || cut === undefined) {
+      throw new Error(`runSim: unknown lever "${id}" or strength "${strength}"`)
+    }
+    cutById[id] = Math.max(cutById[id] ?? 0, cut)
+  }
+
+  // Different levers on the same term multiply together.
+  const multipliers = {}
+  for (const id of Object.keys(cutById)) {
+    const term = findLever(id).term
+    multipliers[term] = (multipliers[term] ?? 1) * (1 - cutById[id])
+  }
+  return multipliers
 }
 
 // ---------------------------------------------------------------------------
 // runSim
 //   villagers: array from villagers.json
 //   protocol:  object from protocol.json
-//   toggles:   { weekendVisits, homeBloodDraws, noFasting } (true/false)
+//   levers:    array of { id, strength }, e.g. [{ id: 'childcareSupport', strength: 'medium' }]
+//              (ids from levers.js, strength 'small' | 'medium' | 'large'). [] = baseline.
 //   seed:      number for the random generator (default 42)
 //   assumptions: optional override, only used by the calibration script
 // ---------------------------------------------------------------------------
-export function runSim(villagers, protocol, toggles, seed = 42, assumptions = ASSUMPTIONS) {
+export function runSim(villagers, protocol, levers = [], seed = 42, assumptions = ASSUMPTIONS) {
   const A = assumptions
   const visits = getVisits(protocol)
+  const multipliers = termMultipliers(levers, A)
 
   // One fixed random number per villager, in list order. Because the same
   // seed gives the same numbers, every scenario reuses them, so a villager
@@ -146,7 +179,10 @@ export function runSim(villagers, protocol, toggles, seed = 42, assumptions = AS
   const random = mulberry32(seed)
 
   const results = villagers.map((villager) => {
-    const terms = burdenTerms(villager, visits, toggles, A)
+    const terms = burdenTerms(villager, visits, A)
+    for (const term of Object.keys(multipliers)) {
+      terms[term] = terms[term] * multipliers[term]
+    }
 
     // Weighted sum of the terms.
     let burden = 0
