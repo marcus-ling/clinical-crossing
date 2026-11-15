@@ -94,7 +94,10 @@ async function askModel(policies, apiKey) {
         responseSchema: RESPONSE_SCHEMA,
         abortSignal: controller.signal,
         // No automatic retries, so the 8-second limit is a hard limit.
-        httpOptions: { timeout: TIMEOUT_MS, retryOptions: { attempts: 1 } },
+        // The 8 seconds is enforced by abortSignal above, not httpOptions.timeout:
+        // the SDK forwards that timeout to Google as a server deadline, and
+        // Google rejects anything under 10 seconds (400 INVALID_ARGUMENT).
+        httpOptions: { retryOptions: { attempts: 1 } },
       },
     })
     return JSON.parse(response.text ?? '')

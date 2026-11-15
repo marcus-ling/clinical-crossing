@@ -1,0 +1,15 @@
+[35mclinical-crossing/CLAUDE.md[m[36m:[m[32m27[m[36m:[m- `GEMINI_[1;31mAPI_KEY[m` lives only in the environment (`.env` locally, Vercel env vars in production). Never commit, print, log, or send it to the browser (no `VITE_` prefix).
+[35mclinical-crossing/CLAUDE.md[m[36m:[m[32m110[m[36m:[m- `npm run dev` start the dev server (also serves `/api/interpret` locally; reads `GEMINI_[1;31mAPI_KEY[m` from `.env`)
+[35mclinical-crossing/README.md[m[36m:[m[32m28[m[36m:[m   GEMINI_[1;31mAPI_KEY[m=your-key-here
+[35mclinical-crossing/README.md[m[36m:[m[32m47[m[36m:[m- Add `GEMINI_[1;31mAPI_KEY[m` under Settings → Environment Variables.
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m8[m[36m:[m//   - GEMINI_[1;31mAPI_KEY[m comes from the environment only. Never log it.
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m81[m[36m:[masync function askModel(policies, [1;31mapiKey[m) {
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m82[m[36m:[m  const ai = new GoogleGenAI({ [1;31mapiKey[m })
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m129[m[36m:[m  const [1;31mapiKey[m = process.env.GEMINI_[1;31mAPI_KEY[m
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m130[m[36m:[m  if (![1;31mapiKey[m) return reply(503, { error: 'Interpreter not configured.' })
+[35mclinical-crossing/api/interpret.js[m[36m:[m[32m134[m[36m:[m    const modelReply = await askModel(policies, [1;31mapiKey[m)
+[35mclinical-crossing/scripts/droidStories.mjs[m[36m:[m[32m12[m[36m:[m//   npm install --save-dev @factory/droid-sdk   (and set FACTORY_[1;31mAPI_KEY[m in .env)
+[35mclinical-crossing/scripts/droidStories.mjs[m[36m:[m[32m14[m[36m:[m// The Droid SDK reads FACTORY_[1;31mAPI_KEY[m from the environment by itself.
+[35mclinical-crossing/vite.config.js[m[36m:[m[32m44[m[36m:[m  // Give the local function GEMINI_[1;31mAPI_KEY[m from .env. Only this one variable,
+[35mclinical-crossing/vite.config.js[m[36m:[m[32m48[m[36m:[m  if (env.GEMINI_[1;31mAPI_KEY[m && !process.env.GEMINI_[1;31mAPI_KEY[m) {
+[35mclinical-crossing/vite.config.js[m[36m:[m[32m49[m[36m:[m    process.env.GEMINI_[1;31mAPI_KEY[m = env.GEMINI_[1;31mAPI_KEY[m
