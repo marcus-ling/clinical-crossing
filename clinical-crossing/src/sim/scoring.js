@@ -2,7 +2,9 @@
 // Turns the player's three interpreted policies into game results.
 // Pure functions, no React, no AI. Every number here comes from runSim.
 //
-// ILLUSTRATIVE ONLY. Par and lever sizes are assumptions, not real-world effects.
+// ILLUSTRATIVE ONLY. Lever sizes are assumptions, not real-world effects.
+// There is no single "par": the player sees how their plan did on two goals
+// that pull in different directions, compared with every possible plan.
 
 import { runSim } from './runSim.js'
 import { LEVERS, STRENGTHS } from './levers.js'
@@ -59,31 +61,54 @@ function groupRetention(villagers, results, test) {
   return { retention: count > 0 ? sum / count : null, count }
 }
 
+// Groups goal: the average retention of the subgroups, each group counted
+// EQUALLY no matter how many villagers are in it. So helping the 6 villagers
+// with limited English matters as much as helping the 29 with kids at home.
+function groupsRetention(villagers, results) {
+  let sum = 0
+  for (const group of SUBGROUPS) sum += groupRetention(villagers, results, group.test).retention
+  return sum / SUBGROUPS.length
+}
+
+// The two goals the player is judged on. They pull in different directions:
+// broad changes help the most people overall, while targeted ones help the
+// groups facing the biggest barriers.
+export const GOALS = [
+  { id: 'overall', label: 'Everyone', measure: (villagers, run) => run.expectedRetention },
+  { id: 'groups', label: 'Groups facing barriers', measure: (villagers, run) => groupsRetention(villagers, run.villagers) },
+]
+
 // ---------------------------------------------------------------------------
-// findPar: the best bundle of 3 different levers, all at medium strength.
-// Brute force: try every combination (9 levers -> 84 bundles) and keep the best.
+// allPlans: every bundle of 3 different levers at medium strength
+// (9 levers -> 84 bundles), with its gain on each goal. Computed once.
+// Used to show the player how their plan compares with every possible plan,
+// instead of grading them against one "right answer".
 // ---------------------------------------------------------------------------
-export function findPar(villagers, protocol, seed) {
-  const baseline = runSim(villagers, protocol, [], seed).expectedRetention
-  let best = null
+export function allPlans(villagers, protocol, seed) {
+  const baseline = runSim(villagers, protocol, [], seed)
+  const plans = []
   for (let i = 0; i < LEVERS.length; i++) {
     for (let j = i + 1; j < LEVERS.length; j++) {
       for (let k = j + 1; k < LEVERS.length; k++) {
         const levers = [LEVERS[i], LEVERS[j], LEVERS[k]].map((lever) => ({ id: lever.id, strength: 'medium' }))
-        const retention = runSim(villagers, protocol, levers, seed).expectedRetention
-        if (!best || retention > best.retention) best = { levers, retention }
+        const run = runSim(villagers, protocol, levers, seed)
+        const gains = {}
+        for (const goal of GOALS) {
+          gains[goal.id] = goal.measure(villagers, run) - goal.measure(villagers, baseline)
+        }
+        plans.push({ levers, gains })
       }
     }
   }
-  return { ...best, gain: best.retention - baseline }
+  return plans
 }
 
 // ---------------------------------------------------------------------------
 // scoreRound: everything the results screen needs.
 //   interpretations: one per policy, from the AI or the offline matcher
-//   par:             result of findPar (computed once, it does not change)
+//   plans:           result of allPlans (computed once, it does not change)
 // ---------------------------------------------------------------------------
-export function scoreRound(villagers, protocol, interpretations, par, seed) {
+export function scoreRound(villagers, protocol, interpretations, plans, seed) {
   const { items, levers } = dedupeInterpretations(interpretations)
 
   const baseline = runSim(villagers, protocol, [], seed)
@@ -104,9 +129,22 @@ export function scoreRound(villagers, protocol, interpretations, par, seed) {
     return { id: group.id, label: group.label, count: before.count, before: before.retention, after: after.retention }
   })
 
-  // Score: the player's gain as a share of par's gain. Not capped, because
-  // "large" policies can beat a par made of "medium" ones.
-  const score = par.gain > 0 ? gain / par.gain : 0
+  // For each goal: what the player's plan did, how many of the possible
+  // three-lever plans it matched or beat, and which plan does best on that goal.
+  // (The player's levers can be "large", so they can beat every medium plan.)
+  const goals = GOALS.map((goal) => {
+    const playerGain = goal.measure(villagers, current) - goal.measure(villagers, baseline)
+    const beats = plans.filter((plan) => playerGain >= plan.gains[goal.id] - 1e-9).length
+    const best = plans.reduce((a, b) => (b.gains[goal.id] > a.gains[goal.id] ? b : a))
+    return {
+      id: goal.id,
+      label: goal.label,
+      gain: playerGain,
+      beats,
+      total: plans.length,
+      best: { levers: best.levers, gain: best.gains[goal.id] },
+    }
+  })
 
-  return { baseline, current, gain, policies, subgroups, par, score }
+  return { baseline, current, gain, policies, subgroups, goals }
 }

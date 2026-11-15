@@ -29,7 +29,11 @@ export default function Results({ round, texts, source, onPlayAgain }) {
   const readingLabel =
     source === 'ai' ? 'AI interpretation of your text' : "The offline matcher's reading of your text"
 
-  const parNames = round.par.levers.map((l) => findLever(l.id).name.toLowerCase())
+  // "home or mobile blood draws, ... and childcare support"
+  const planNames = (levers) => {
+    const names = levers.map((l) => findLever(l.id).name.toLowerCase())
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  }
 
   return (
     <section className="results" aria-label="Results">
@@ -91,14 +95,27 @@ export default function Results({ round, texts, source, onPlayAgain }) {
         ))}
       </ul>
 
-      <div className="score-card">
-        <p className="score-line">
-          Score: <strong>{Math.round(round.score * 100)}%</strong> of par
-        </p>
-        <p className="score-par">
-          Par was {parNames[0]}, {parNames[1]} and {parNames[2]}, for {points(round.par.gain)}.
-        </p>
-      </div>
+      {/* Two goals, no single right answer. Each compares the player's plan with
+          every possible plan of three different levers at a solid (medium) step. */}
+      <h3 className="results-subtitle">How your plan compares</h3>
+      {round.goals.map((goal) => (
+        <div key={goal.id} className="score-card">
+          <p className="score-line">
+            {goal.label}: <strong>{points(goal.gain)}</strong>
+          </p>
+          <p className="score-par">
+            Matches or beats {goal.beats} of {goal.total} possible three-change plans.
+          </p>
+          <p className="score-par">
+            The plan that helps {goal.id === 'overall' ? 'everyone' : 'these groups'} most here is{' '}
+            {planNames(goal.best.levers)}, for {points(goal.best.gain)}.
+          </p>
+        </div>
+      ))}
+      <p className="score-par">
+        &ldquo;Groups facing barriers&rdquo; averages the three groups above, each counted equally however small.
+        All of these are illustrative.
+      </p>
 
       <button type="button" className="submit-button" onClick={onPlayAgain}>
         Play again

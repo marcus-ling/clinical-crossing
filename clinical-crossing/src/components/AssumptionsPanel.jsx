@@ -42,24 +42,33 @@ export default function AssumptionsPanel() {
 
       <h3>Your policy changes</h3>
       <p>
-        Each idea you type is matched to one of the levers below, and each lever eases exactly one burden. A small
-        step cuts that burden by {pct(cuts.small)}, a solid step by {pct(cuts.medium)} and a big step by{' '}
-        {pct(cuts.large)}. These sizes are assumptions, not measured effects. Two levers on the same burden stack
-        (half, then half again).
+        Each idea you type is matched to one of the levers below. Each lever changes something concrete about
+        the trial, and only for the villagers it reaches. A small step changes it by {pct(cuts.small)}, a solid
+        step by {pct(cuts.medium)} and a big step by {pct(cuts.large)} (for example, half of the visits move to
+        phone). These sizes are assumptions, not measured effects. Two levers on the same thing stack (half,
+        then half again).
       </p>
       <ul>
         {LEVERS.map((lever) => (
           <li key={lever.id}>
-            {lever.name}: eases {BURDEN_LABELS[lever.term]}
+            {lever.name}: {lever.effect}
           </li>
         ))}
       </ul>
-
-      <h3>Par and your score</h3>
       <p>
-        Par is the best three levers at a solid (medium) step, found by trying every combination. Your score is
-        how many points you gained compared with par. Par is just an illustrative yardstick, not a recommended
-        policy package.
+        More assumptions: a home visit takes {ASSUMPTIONS.homeVisitHours} hour with no trip; a call takes{' '}
+        {ASSUMPTIONS.phoneVisitHours} hours, and visits moved to phone are assumed to get their blood draws done
+        elsewhere; a satellite clinic eases the no-car burden {pct(ASSUMPTIONS.satelliteNoVehicleShare)} as much
+        as it shortens the trip.
+      </p>
+
+      <h3>How your plan is judged</h3>
+      <p>
+        There is no single right answer. Your plan is measured on two goals that pull in different directions:
+        retention for everyone, and retention for the groups facing barriers (no car, kids at home, limited
+        English), with each group counted equally however small it is. You see how many of the possible
+        three-lever plans yours matched or beat on each goal, and which plan does best on each. These are
+        illustrative yardsticks, not recommended policy packages.
       </p>
 
       <h3>The AI&apos;s job</h3>

@@ -334,6 +334,10 @@
   background: var(--wood-light);
 }
 
+.score-card + .score-card {
+  margin-top: 10px;
+}
+
 .score-line {
   font-size: 20px;
   font-weight: 800;

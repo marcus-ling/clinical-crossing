@@ -19,7 +19,7 @@ I am a solo beginner. Keep code simple, readable, and commented. Prefer plain Ja
 1. Intro sign: expected retention is X%; you get three policy changes; which three would do the most to widen access?
 2. Three text boxes (max 200 chars each) and a Submit button. **No menu of options**: the player thinks of policies themselves. Privacy notice near Submit: the text goes to Google's Gemini API, don't enter personal information, nothing is stored.
 3. `src/ai/interpret.js` posts to `/api/interpret`. On ANY failure it falls back to `src/ai/localMatcher.js` (keywords, same output shape) and shows an "Offline matcher in use" banner. The game must never break.
-4. Results: new retention vs baseline; each policy with its interpretation (lever, strength, one-line reason, labeled "AI interpretation of your text") and its marginal effect in points (leave-one-out); subgroup changes (no vehicle, kids at home, limited English); rescued villagers get the green ring and walk to the clinic; score = player's gain / par gain; "Play again".
+4. Results: new retention vs baseline; each policy with its interpretation (lever, strength, one-line reason, labeled "AI interpretation of your text") and its marginal effect in points (leave-one-out); subgroup changes (no vehicle, kids at home, limited English); rescued villagers get the green ring and walk to the clinic; two goals, no single par: for "Everyone" (overall retention) and "Groups facing barriers" (the three subgroups, each weighted equally), show the player's gain, how many of the 84 medium three-lever plans it matches or beats, and the best plan for that goal; "Play again".
 5. If two policies map to the same lever, only the stronger counts and the UI says which one overlapped. If a policy maps to no lever, say plainly that the model doesn't track that kind of barrier.
 
 ## Stack and hard rules
@@ -39,8 +39,8 @@ public/data/villagers.json     sampled villagers (output of the script)
 public/protocol.json           the one trial protocol, hand-checked
 scripts/make_villagers.py      ACS PUMS -> villagers.json
 src/sim/runSim.js              the sim engine (pure function, no UI code)
-src/sim/levers.js              the closed list of policy levers (each targets ONE burden term)
-src/sim/scoring.js             dedupe, leave-one-out, subgroups, par, score (no AI)
+src/sim/levers.js              the closed list of policy levers (name, blurb, plain-language effect)
+src/sim/scoring.js             dedupe, leave-one-out, subgroups, two goals, all plans (no AI)
 src/ai/validate.js             request + AI reply validation (shared by browser and function)
 src/ai/interpret.js            browser: POST /api/interpret, fall back to localMatcher
 src/ai/localMatcher.js         offline keyword matcher
@@ -59,11 +59,11 @@ Each villager gets a burden score from: travel time to the site for each **offic
 `dropout_probability = logistic(a + b * burden)`
 
 - Levers only modify the burden inputs. `levers` is an array of `{ id, strength }`; `[]` is the baseline.
-  - Each lever in `src/sim/levers.js` targets exactly ONE existing burden term. No new burden terms.
-  - small / medium / large multiply the targeted term by 0.75 / 0.5 / 0.25 (`ASSUMPTIONS.strengthCuts`, an assumption). Different levers on the same term multiply; the same lever twice counts once (the stronger).
+  - Each lever changes something concrete about the trial, only for the villagers it reaches (`buildPlan()` in `runSim.js`; plain words in `levers.js` `effect`). Levers may touch more than one existing burden term, but there are no new burden terms. Examples: satellite clinic shortens the trip but not the visit; phone visits replace some office visits but only reach villagers who can do a call in English unless interpreters are also chosen; paid leave only reaches people who work.
+  - small / medium / large change what the lever acts on by 25% / 50% / 75% (`ASSUMPTIONS.strengthCuts`, an assumption). Any other effect size goes in `ASSUMPTIONS` with a comment. Different levers on the same thing multiply; the same lever twice counts once (the stronger). With no levers the baseline must stay exactly the same (`scripts/checkLevers.js` checks this).
   - The old toggles are now levers: weekendEveningHours (lostWorkHours; weekday-only visits NOT confirmed in the protocol), homeBloodDraws (travelAndVisitTime; hypothetical, the protocol uses a central lab), relaxedFasting (fastingConflict; hypothetical).
 - **The AI never sets numbers.** It may only return a lever id from the closed list and a strength word; `src/ai/validate.js` throws away anything else (unknown ids, bad strengths, long reasons, reasons containing digits).
-- Par: the best bundle of 3 distinct levers at medium, found by brute force in code. Par and lever sizes are illustrative; say so in the assumptions panel.
+- No single par. Score on two goals that pull in different directions (everyone vs groups facing barriers), compared with all 84 medium plans found by brute force. The two goals must keep different best plans (`checkLevers.js` checks this); do not tune weights to force it. Lever sizes and plans are illustrative; say so in the assumptions panel.
 - Use a seeded random number generator so results are repeatable during the demo. Write a tiny one by hand (for example mulberry32). No dependency.
 - Put ALL coefficients in one `ASSUMPTIONS` object at the top of `runSim.js`, each with a comment saying whether it is sourced (with citation) or an assumption. The UI assumptions panel reads from this object.
 - **Calibration:** choose the intercept `a` so baseline retention lands near the published VIVID completion rate (365 of 420, about 87%, source PMC7065168; the protocol itself planned for 25% dropout). Label `a` as "calibrated to published rate". The slope `b` and the burden weights are assumptions. Expect levers to move retention by a few points, not tens of points, and do not tune the weights just to make the demo number bigger.

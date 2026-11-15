@@ -20,7 +20,7 @@ import { MAX_REASON_CHARS, MAX_NOTE_CHARS, validatePolicies, validateReply } fro
 
 // A current STABLE (non-preview) Flash model, checked against the official
 // Gemini models page on 2026-11-15. Update here if Google retires it.
-const MODEL = 'gemini-3.8-flash'
+const MODEL = 'gemini-3.5-flash-lite'
 const TIMEOUT_MS = 8000
 const MAX_REQUEST_BYTES = 2048
 

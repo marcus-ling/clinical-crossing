@@ -4,7 +4,7 @@ import PolicyForm from './components/PolicyForm.jsx'
 import Results from './components/Results.jsx'
 import AssumptionsPanel from './components/AssumptionsPanel.jsx'
 import { runSim } from './sim/runSim.js'
-import { findPar, scoreRound } from './sim/scoring.js'
+import { allPlans, scoreRound } from './sim/scoring.js'
 import { interpretPolicies } from './ai/interpret.js'
 import { validatePolicies } from './ai/validate.js'
 import './App.css'
@@ -59,9 +59,9 @@ function App() {
     }
   }, [])
 
-  // Baseline (no changes) and par (best 3 levers at medium) never change, so work them out once.
+  // Baseline (no changes) and every possible 3-lever plan never change, so work them out once.
   const baseline = useMemo(() => (data ? runSim(data.villagers, data.protocol, [], SEED) : null), [data])
-  const par = useMemo(() => (data ? findPar(data.villagers, data.protocol, SEED) : null), [data])
+  const plans = useMemo(() => (data ? allPlans(data.villagers, data.protocol, SEED) : null), [data])
 
   async function handleSubmit() {
     const texts = validatePolicies(policies)
@@ -69,7 +69,7 @@ function App() {
     setBusy(true)
     // interpretPolicies never throws: on any problem it uses the offline matcher.
     const { interpretations, source } = await interpretPolicies(texts)
-    const round = scoreRound(data.villagers, data.protocol, interpretations, par, SEED)
+    const round = scoreRound(data.villagers, data.protocol, interpretations, plans, SEED)
     setOutcome({ round, texts, source })
     setBusy(false)
   }

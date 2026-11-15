@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { runSim } from '../src/sim/runSim.js'
 import { LEVERS, STRENGTHS } from '../src/sim/levers.js'
-import { dedupeInterpretations, findPar, scoreRound } from '../src/sim/scoring.js'
+import { GOALS, allPlans, dedupeInterpretations, scoreRound } from '../src/sim/scoring.js'
 import { validateInterpretation, validatePolicies, validateReply } from '../src/ai/validate.js'
 import { matchLocally } from '../src/ai/localMatcher.js'
 
@@ -109,13 +109,38 @@ check('policy request validation (exactly 3 strings, 1-200 chars)',
   validatePolicies(['a', 'b', 3]) === null)
 
 // ---------------------------------------------------------------------------
-// 6. Par is computed: 3 different levers, all medium, better than baseline,
-//    and no other medium bundle beats it.
+// 6. All plans: 84 bundles of 3 distinct medium levers, each with a gain on
+//    every goal. The two goals should NOT share the same best plan, otherwise
+//    the game is back to one fixed "right answer".
 // ---------------------------------------------------------------------------
-const par = findPar(villagers, protocol, SEED)
-const parIds = new Set(par.levers.map((l) => l.id))
-check('par is computed (3 distinct medium levers, gain > 0)',
-  par.levers.length === 3 && parIds.size === 3 && par.levers.every((l) => l.strength === 'medium') && par.gain > 0)
+const plans = allPlans(villagers, protocol, SEED)
+const bestFor = (goalId) => plans.reduce((a, b) => (b.gains[goalId] > a.gains[goalId] ? b : a))
+const planKey = (plan) => plan.levers.map((l) => l.id).sort().join('+')
+check('all 84 plans computed (3 distinct medium levers each)',
+  plans.length === 84 && plans.every((p) => new Set(p.levers.map((l) => l.id)).size === 3 && p.levers.every((l) => l.strength === 'medium')))
+check('the two goals have different best plans',
+  GOALS.length === 2 && planKey(bestFor('overall')) !== planKey(bestFor('groups')))
+
+// 7. Lever mechanics: levers that used to be identical now differ, and they
+//    reach the people the lever description says they do.
+const one = (id, strength = 'medium') => runSim(villagers, protocol, [{ id, strength }], SEED)
+const travelGains = ['homeBloodDraws', 'moreTelephoneVisits', 'satelliteClinic'].map((id) => one(id).expectedRetention)
+check('home draws, phone visits and satellite clinic no longer give identical results',
+  new Set(travelGains).size === 3)
+// Phone visits don't reach limited-English villagers on their own, but do when interpreters are added.
+const limitedIdx = villagers.map((v, i) => (v.ENG >= 3 ? i : -1)).filter((i) => i >= 0)
+const travelOf = (run) => limitedIdx.reduce((s, i) => s + run.villagers[i].burden, 0)
+const withPhone = runSim(villagers, protocol, [{ id: 'moreTelephoneVisits', strength: 'large' }], SEED)
+const withPhoneAndInterp = runSim(villagers, protocol, [{ id: 'moreTelephoneVisits', strength: 'large' }, { id: 'languageSupport', strength: 'small' }], SEED)
+const interpOnly = runSim(villagers, protocol, [{ id: 'languageSupport', strength: 'small' }], SEED)
+check('phone visits reach limited-English villagers only with interpreters',
+  limitedIdx.length > 0 &&
+  travelOf(withPhone) === travelOf(baseline) &&
+  travelOf(withPhoneAndInterp) < travelOf(interpOnly))
+// Paid leave only helps people who work.
+const paid = one('paidLeave', 'large')
+check('paid leave changes nothing for people who do not work',
+  villagers.every((v, i) => v.WKHP > 0 || paid.villagers[i].burden === baseline.villagers[i].burden))
 
 // Offline matcher sanity (also not required, but it guards the fallback).
 const matched = matchLocally(['free bus passes and rides', 'childcare during visits', 'pay people $1000 to join'])
@@ -132,10 +157,14 @@ for (const lever of LEVERS) {
   const r = runSim(villagers, protocol, [{ id: lever.id, strength: 'medium' }], SEED).expectedRetention
   console.log(`  ${lever.id.padEnd(20)} ${pts(r - baseline.expectedRetention)}`)
 }
-console.log(`\nPar: ${par.levers.map((l) => l.id).join(' + ')}  ${pts(par.gain)}`)
+for (const goal of GOALS) {
+  const best = bestFor(goal.id)
+  console.log(`Best plan for "${goal.label}": ${best.levers.map((l) => l.id).join(' + ')}  ${pts(best.gains[goal.id])}`)
+}
 
-const round = scoreRound(villagers, protocol, dupes, par, SEED)
-console.log(`Example round (the dedupe test above): ${pts(round.gain)}, score ${Math.round(round.score * 100)}% of par`)
+const round = scoreRound(villagers, protocol, dupes, plans, SEED)
+console.log(`\nExample round (the dedupe test above): ${pts(round.gain)}`)
+for (const g of round.goals) console.log(`  ${g.label}: ${pts(g.gain)}, matches or beats ${g.beats} of ${g.total} plans`)
 for (const p of round.policies) console.log(`  policy ${p.policyIndex + 1}: ${p.leverId} ${p.strength}  marginal ${pts(p.marginal)}${p.overlapsWith !== null ? `  (overlaps policy ${p.overlapsWith + 1})` : ''}`)
 for (const g of round.subgroups) console.log(`  ${g.label.padEnd(16)} n=${String(g.count).padEnd(3)} ${pts(g.after - g.before)}`)
 
